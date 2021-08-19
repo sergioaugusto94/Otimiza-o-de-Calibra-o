@@ -3,7 +3,7 @@ import numpy as np
 import scipy
 from scipy.interpolate import (interp2d, interp1d)
 import math
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import (mean_squared_error, mean_absolute_error)
 
 eng_dis = 999 # Cilindradas do motor
 bar2nm = eng_dis/40/math.pi # Conversão pressão p/ torque
@@ -144,76 +144,142 @@ data['erro_cmee'] = data['CMEE'] - data['calc_cmee']
 # data['erro_friction_ecu'] = data['ecu_friction'] - data['tcth2o']
 
 
-def otimizador(mapa, df_real, variavel, df, mapa_x, mapa_y = None):
+
+'''
+x, y = tbinvspec.shape[0], tbinvspec.shape[1]
+for i in range(1, x):
+    for j in range(1, 2): #Lembrar de trocar o 2 por j
+        erro_0 = mean_squared_error(data['IMEPH0']*bar2nm, data['calc_cmie'])
+        parada = True
+        lista_erros = [erro_0,0,0,0]
+        lista_valor = [tbinvspec.iloc[i,j], 0]
+        delta0 = 10
+        k = 1
+        while parada:
+            valor0 = tbinvspec.iloc[i,j]
+            tbinvspec.iloc[i,j] += delta0
+            f_tbinvspec = function(tbinvspec)
+            data = out_df(data, f_tbinvspec, 'tbinvspec', 'af', 'RPM')  
+            data['calc_cmie'] = (data['tbinvspec']/AFCMI2PMI*data[var_ar] + data['tbcmioff'])*data['RDTQREEL']/100*data['tbrdtqlam']/100
+            
+            erro_mse = mean_squared_error(data['IMEPH0']*bar2nm, data['calc_cmie'])
+            lista_erros[k%4] = erro_mse
+            lista_valor[k%2] = tbinvspec.iloc[i,j]
+            if erro_mse == erro_0:
+                parada = False
+                tbinvspec.iloc[i,j] = valor0
+            delta_erro = lista_erros[k%4] - lista_erros[(k-1)%4]
+            delta_valor = lista_valor[k%2] - lista_valor[(k-1)%2]
+            delta0 = -delta_erro/delta_valor
+            if abs(delta_erro) < 0.00011:
+                parada = False
+                tbinvspec.iloc[i,j] = valor0
+            k += 1
+            if k%100 == 99:
+                print(erro_mse)
+'''
+
+def otimizador(mapa, df_real, variavel, df, aprendizagem, mapa_x, mapa_y = None):
     x, y = mapa.shape[0], mapa.shape[1]
     if x > 2:
-        for i in range(8, x): 
-            for j in range(2, y): 
+        for i in range(1, x): 
+            for j in range(1, y): 
                 erro_0 = mean_squared_error(df_real, df['calc_'+variavel])
                 parada = True
                 lista_erros = [erro_0,0,0,0]
                 lista_valor = [mapa.iloc[i,j], 0]
-                delta0 = 10
+                lista_erro_corte = [0]*20
+                delta0 = mapa.iloc[i,j]*0.1 + 0.1
                 k = 1
+                coluna0 = df[get_df_name(mapa)].copy()
+                valor0 = mapa.iloc[i,j].copy()
+                coluna_calc0 = df['calc_' + variavel].copy()
                 while parada:
-                    valor0 = mapa.iloc[i,j]
-                    mapa.iloc[i,j] += delta0
+                    mapa.iloc[i,j] += delta0*aprendizagem
+                    valor1 = mapa.iloc[i,j]
                     f_mapa = function(mapa)
                     df = out_df(df, f_mapa, get_df_name(mapa), mapa_x, mapa_y)  
                     df = f_calculada(variavel, df)
-                    erro_mse = mean_squared_error(df_real,  df['calc_'+variavel])
+                    alterados_df = df[get_df_name(mapa)]
+                    alterados_df = alterados_df - coluna0
+                    indices = np.nonzero(df.iloc[:,0].values)[0]
+                    alterados = alterados_df.astype(bool).sum(axis = 0)
+                    if alterados != 0:
+                        indices = np.nonzero(alterados_df.values)[0]
+                    if k == 1:
+                        lista_erros[0] = mean_squared_error(df_real[indices],  coluna_calc0[indices])
+                    erro_mse = mean_squared_error(df_real[indices],  df['calc_'+variavel][indices])
                     lista_erros[k%4] = erro_mse
                     lista_valor[k%2] = mapa.iloc[i,j]
+                    lista_erro_corte[k%20] = erro_mse
                     if erro_mse == erro_0:
-                        parada = False
                         mapa.iloc[i,j] = valor0
+                        break
                     delta_erro = lista_erros[k%4] - lista_erros[(k-1)%4]
                     delta_valor = lista_valor[k%2] - lista_valor[(k-1)%2]
-                    delta0 = -delta_erro/delta_valor
-                    if abs(delta_erro/delta_valor) < 0.001:
+                    delta_erro_corte = lista_erro_corte[k%20] - lista_erro_corte[(k-19)%20]
+                    delta0 = -delta_erro/delta_valor*(mapa.shape[0]*mapa.shape[1]/alterados)
+                    if abs(delta_erro_corte) < 0.005:
                         parada = False
-                        mapa.iloc[i,j] = valor0
+                        mapa.iloc[i,j] = valor1
                     k += 1
-                    if k%100 == 99:
-                        print(erro_mse)
+                    print(erro_mse, delta0, -delta_erro/delta_valor)
+                    if k%1000 == 1:
+                        print(erro_mse, delta0)
+
     else: 
-        for j in range(1, y): 
+        for j in range (3, y): #trocar o 2 por 0
             i = 1
             erro_0 = mean_squared_error(df_real, df['calc_'+variavel])
             parada = True
-            lista_erros = [erro_0,0,0,0]
+            lista_erros = [0,0,0,0]
             lista_valor = [mapa.iloc[i,j], 0]
-            delta0 = 10
+            lista_erro_corte = [0]*20
+            delta0 = mapa.iloc[i,j]*0.01 + 0.1
             k = 1
+            coluna0 = df[get_df_name(mapa)].copy()
+            valor0 = mapa.iloc[i,j].copy()
+            coluna_calc0 = df['calc_' + variavel].copy()
             while parada:
-                valor0 = mapa.iloc[i,j]
-                mapa.iloc[i,j] += delta0
+                mapa.iloc[i,j] += delta0*aprendizagem
+                valor1 = mapa.iloc[i,j]
                 f_mapa = function(mapa)
                 df = out_df(df, f_mapa, get_df_name(mapa), mapa_x, mapa_y)  
                 df = f_calculada(variavel, df)
-                erro_mse = mean_squared_error(df_real,  df['calc_'+variavel])
+                alterados_df = df[get_df_name(mapa)]
+                alterados_df = alterados_df - coluna0
+                indices = np.nonzero(df.iloc[:,0].values)[0]
+                alterados = alterados_df.astype(bool).sum(axis = 0)
+                if alterados != 0:
+                    indices = np.nonzero(alterados_df.values)[0]
+                if k == 1:
+                    lista_erros[0] = mean_squared_error(df_real[indices],  coluna_calc0[indices])
+                erro_mse = mean_squared_error(df_real[indices],  df['calc_'+variavel][indices])
                 lista_erros[k%4] = erro_mse
                 lista_valor[k%2] = mapa.iloc[i,j]
+                lista_erro_corte[k%20] = erro_mse
                 if erro_mse == erro_0:
-                    parada = False
                     mapa.iloc[i,j] = valor0
+                    break
                 delta_erro = lista_erros[k%4] - lista_erros[(k-1)%4]
                 delta_valor = lista_valor[k%2] - lista_valor[(k-1)%2]
+                delta_erro_corte = lista_erro_corte[k%20] - lista_erro_corte[(k-19)%20]
                 delta0 = -delta_erro/delta_valor
-                if abs(delta_erro/delta_valor) < 0.001:
+                if abs(delta_erro_corte) < 0.005:
                     parada = False
-                    mapa.iloc[i,j] = valor0
+                    mapa.iloc[i,j] = valor1
                 k += 1
-                print(erro_mse)
-                if k%100 == 99:
-                    print(erro_mse)
+                print(erro_mse, delta0, -delta_erro/delta_valor)
+                if k%1000 == 1:
+                    print(erro_mse, delta0)
+            
     return mapa
 
 
-tbcmioff = otimizador(tbcmioff, data['IMEPH0']*bar2nm, 'cmie', data, 'RPM')
-tbinvspec = otimizador(tbinvspec, data['IMEPH0']*bar2nm, 'cmie', data, 'af', 'RPM')
-# pqdpumpfl = otimizador(pqdpumpfl, -data['IMEPL0']*bar2nm, 'pumptot', data, 'RPM', mapa)
+tbcmioff = otimizador(tbcmioff, data['IMEPH0']*bar2nm, 'cmie', data, 0.1, 'RPM')
+tbinvspec = otimizador(tbinvspec, data['IMEPH0']*bar2nm, 'cmie', data, 1, 'af', 'RPM')
+pqdpumpfl = otimizador(pqdpumpfl, -data['IMEPL0']*bar2nm, 'pumptot', data, 1, 'RPM', mapa)
 
-
-
-
+pqdpumpfl.to_excel('pqdpumpfl.xlsx', header = False, index = False)
+tbcmioff.to_excel('tbcmioff.xlsx', header = False, index = False)
+tbinvspec.to_excel('tbinvspec.xlsx', header = False, index = False)
